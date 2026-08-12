@@ -2,15 +2,21 @@ name: Build KJV + Strong's Obsidian
 
 on:
   workflow_dispatch:
+    inputs:
+      refresh_source:
+        description: "Try to refresh the committed KJV source"
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "47 2 1 * *"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: kjv-strongs
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -20,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,18 +35,39 @@ jobs:
           python-version: "3.12"
 
       - name: Build KJV + Strong's
+        env:
+          REFRESH_SOURCE: ${{ github.event.inputs.refresh_source || 'false' }}
         run: |
           set -euo pipefail
-          python scripts/import_kjv_strongs.py
+          if [ "$REFRESH_SOURCE" = "true" ]; then
+            python scripts/import_kjv_strongs.py --refresh
+          else
+            python scripts/import_kjv_strongs.py
+          fi
 
       - name: Validate
         run: |
           set -euo pipefail
+          test -s vendor/kjv2006/eng-kjv2006_usfx.xml
           test -s build/build_report.json
           test -s build/source_manifest.json
           test -d build/obsidian-kjv/KJV
           test ! -e build/bible_mt_tr.sqlite
           python tests/test_kjv.py
+
+      - name: Commit refreshed source
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.refresh_source == 'true'
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- vendor/kjv2006/eng-kjv2006_usfx.xml; then
+            echo "No source change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vendor/kjv2006/eng-kjv2006_usfx.xml
+          git commit -m "chore(data): refresh KJV2006 Strong's source"
+          git push
 
       - name: Package
         run: |
