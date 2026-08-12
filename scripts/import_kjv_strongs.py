@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Build KJV + Strong's Obsidian notes from BibleEngine static JSON.
+"""Build KJV + Strong's Obsidian notes from the official CrossWire KJV SWORD module.
 
-BibleEngine documents:
-  /v1/kjv/manifest.json
-  /v1/kjvstrongs/{BB}/{CCC}.json
+The importer downloads the module archive from CrossWire, extracts its OSIS
+source, parses embedded Strong's/morphology markup, and creates one Markdown
+note per verse.
 
-This is an Obsidian-only reference layer. It never writes bible_mt_tr.sqlite.
+KJV remains Obsidian-only; bible_mt_tr.sqlite is never created or modified.
 """
 from __future__ import annotations
 
@@ -14,50 +14,58 @@ import hashlib
 import json
 import re
 import shutil
-import time
-import urllib.error
+import subprocess
+import tempfile
 import urllib.request
-import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
-RAW = BUILD / "raw" / "bibleengine"
+RAW = BUILD / "raw" / "crosswire"
 VAULT = BUILD / "obsidian-kjv"
 
-BASE = "https://bibleengine.org/v1"
-MANIFEST_URL = f"{BASE}/kjv/manifest.json"
-STRONGS_URL = f"{BASE}/kjvstrongs/{{book:02d}}/{{chapter:03d}}.json"
+# CrossWire's official current KJV module page identifies KJV 3.1.
+# The module repository is the authoritative distribution source.
+MODULE_URL = "https://ftp.crosswire.org/sword/packages/rawzip/KJV.zip"
+MODULE_INFO = "https://www.crosswire.org/sword/modules/ModInfo.jsp?modName=KJV"
 
-# Optional independent audit source.
-CROSSWIRE_REPO = "https://gitlab.com/crosswire-bible-society/kjv.git"
+BOOKS = [
+    "Gen","Exod","Lev","Num","Deut","Josh","Judg","Ruth",
+    "1Sam","2Sam","1Kgs","2Kgs","1Chr","2Chr","Ezra","Neh",
+    "Esth","Job","Ps","Prov","Eccl","Song","Isa","Jer","Lam",
+    "Ezek","Dan","Hos","Joel","Amos","Obad","Jonah","Mic",
+    "Nah","Hab","Zeph","Hag","Zech","Mal","Matt","Mark","Luke",
+    "John","Acts","Rom","1Cor","2Cor","Gal","Eph","Phil","Col",
+    "1Thess","2Thess","1Tim","2Tim","Titus","Phlm","Heb","Jas",
+    "1Pet","2Pet","1John","2John","3John","Jude","Rev"
+]
+BOOK_NAMES = [
+    "Genesis","Exodus","Leviticus","Numbers","Deuteronomy","Joshua","Judges","Ruth",
+    "1 Samuel","2 Samuel","1 Kings","2 Kings","1 Chronicles","2 Chronicles","Ezra","Nehemiah",
+    "Esther","Job","Psalms","Proverbs","Ecclesiastes","Song of Solomon","Isaiah","Jeremiah",
+    "Lamentations","Ezekiel","Daniel","Hosea","Joel","Amos","Obadiah","Jonah","Micah","Nahum",
+    "Habakkuk","Zephaniah","Haggai","Zechariah","Malachi","Matthew","Mark","Luke","John","Acts",
+    "Romans","1 Corinthians","2 Corinthians","Galatians","Ephesians","Philippians","Colossians",
+    "1 Thessalonians","2 Thessalonians","1 Timothy","2 Timothy","Titus","Philemon","Hebrews",
+    "James","1 Peter","2 Peter","1 John","2 John","3 John","Jude","Revelation"
+]
+BOOK_MAP = dict(zip(BOOKS, BOOK_NAMES))
 
-def fetch(url: str, attempts: int = 5) -> bytes:
-    last = None
-    for attempt in range(1, attempts + 1):
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "BibleStudy-KJVStrongImporter/3.0",
-                "Accept": "application/json,text/plain,*/*",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=120) as response:
-                data = response.read()
-            if not data:
-                raise RuntimeError(f"empty response: {url}")
-            return data
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", "replace")[:500]
-            last = RuntimeError(f"HTTP {exc.code} for {url}: {body}")
-            if exc.code == 404:
-                break
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            last = exc
-        if attempt < attempts:
-            time.sleep(min(2 ** (attempt - 1), 16))
-    raise RuntimeError(f"Could not fetch {url}: {last}") from last
+NS = {"osis": "http://www.bibletechnologies.net/2003/OSIS/namespace"}
+
+def download(url: str, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "BibleStudy-CrossWire-KJV-Importer/1.0"}
+    )
+    with urllib.request.urlopen(req, timeout=180) as r:
+        data = r.read()
+    if not data:
+        raise RuntimeError(f"Empty download: {url}")
+    path.write_bytes(data)
 
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -66,129 +74,98 @@ def sha256(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-def get_json(url: str, path: Path) -> object:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.stat().st_size:
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            path.unlink()
-    data = fetch(url)
-    try:
-        obj = json.loads(data.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise RuntimeError(f"Invalid JSON from {url}") from exc
-    path.write_bytes(data)
-    return obj
+def local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
 
-def parse_manifest(manifest: object) -> list[tuple[int, str, list[int]]]:
-    """Normalize BibleEngine's manifest to (id, name, chapter verse counts)."""
-    books = manifest.get("books") if isinstance(manifest, dict) else manifest
-    if not isinstance(books, list):
-        raise RuntimeError("BibleEngine manifest does not contain a books list")
+def strong_tags(element: ET.Element) -> list[str]:
+    values = []
+    for node in element.iter():
+        for key, value in node.attrib.items():
+            if local_name(key).lower() in {"lemma", "strong"}:
+                for match in re.findall(r"[GH]\d{1,5}", value.upper()):
+                    if match not in values:
+                        values.append(match)
+    return values
 
-    result = []
-    for position, item in enumerate(books, 1):
-        if not isinstance(item, dict):
-            raise RuntimeError(f"Invalid manifest book {position}")
+def morphology(element: ET.Element) -> list[str]:
+    values = []
+    for node in element.iter():
+        for key, value in node.attrib.items():
+            if local_name(key).lower() in {"morph", "morphology"}:
+                if value not in values:
+                    values.append(value)
+    return values
 
-        book_id = item.get("id", item.get("book", position))
-        name = item.get("name", item.get("title"))
-        chapters = item.get("chapters")
+def flatten_text(element: ET.Element) -> str:
+    return " ".join("".join(element.itertext()).split())
 
-        try:
-            book_id = int(book_id)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"Invalid book id at position {position}") from exc
+def find_osis_xml(extract_dir: Path) -> Path:
+    candidates = list(extract_dir.rglob("*.xml"))
+    preferred = [
+        p for p in candidates
+        if p.name.lower() in {"kjv.xml", "kjvfull.xml", "kjv-osis.xml"}
+    ]
+    if preferred:
+        return preferred[0]
+    if len(candidates) == 1:
+        return candidates[0]
+    raise RuntimeError(
+        "Could not uniquely identify CrossWire OSIS/XML source in module: "
+        + ", ".join(str(p.relative_to(extract_dir)) for p in candidates)
+    )
 
-        if not name or not isinstance(chapters, list):
-            raise RuntimeError(
-                f"Manifest book {book_id} lacks name/chapters data"
-            )
+def parse_osis(xml_path: Path) -> dict:
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    verses = {}
 
-        verse_counts = []
-        for chapter in chapters:
-            if isinstance(chapter, dict):
-                count = chapter.get("verses", chapter.get("verse_count"))
-            else:
-                count = chapter
-            try:
-                verse_counts.append(int(count))
-            except (TypeError, ValueError) as exc:
-                raise RuntimeError(
-                    f"Invalid verse count for {name}, chapter {len(verse_counts)+1}"
-                ) from exc
+    for verse in root.iter():
+        if local_name(verse.tag) != "verse":
+            continue
 
-        result.append((book_id, str(name), verse_counts))
+        osis_id = verse.attrib.get("osisID") or verse.attrib.get("osisRef")
+        if not osis_id:
+            continue
 
-    if len(result) != 66:
-        raise RuntimeError(f"Expected 66 books, manifest contains {len(result)}")
-    return result
+        # CrossWire uses IDs such as Gen.1.1. Ignore notes and non-canonical
+        # references by requiring book.chapter.verse.
+        m = re.fullmatch(r"([^.]+)\.(\d+)\.(\d+)", osis_id.split()[0])
+        if not m:
+            continue
 
-def validate_words(record: object, url: str, verse: str) -> list[tuple[str, list[str]]]:
-    if not isinstance(record, dict):
-        raise ValueError(f"{url} verse {verse}: record is not an object")
-    words = record.get("w")
-    if not isinstance(words, list):
-        raise ValueError(f"{url} verse {verse}: missing w[]")
+        book_code, chapter, verse_no = m.groups()
+        if book_code not in BOOK_MAP:
+            continue
 
-    result = []
-    for item in words:
-        if not isinstance(item, list) or len(item) != 2:
-            raise ValueError(f"{url} verse {verse}: malformed word {item!r}")
-        surface, numbers = item
-        if not isinstance(surface, str) or not isinstance(numbers, list):
-            raise ValueError(f"{url} verse {verse}: malformed word {item!r}")
-
-        tags = []
-        for number in numbers:
-            tag = str(number).upper()
-            if not re.fullmatch(r"[GH][0-9]{1,5}", tag):
-                raise ValueError(
-                    f"{url} verse {verse}: invalid Strong's tag {tag!r}"
-                )
-            tags.append(tag)
-        result.append((surface, tags))
-    return result
-
-def download_all(books):
-    chapters = {}
-    files = []
-
-    for book_id, book, verse_counts in books:
-        print(f"[{book_id:02}/66] {book}")
-        for chapter, expected_verses in enumerate(verse_counts, 1):
-            url = STRONGS_URL.format(book=book_id, chapter=chapter)
-            path = RAW / f"{book_id:02d}" / f"{chapter:03d}.json"
-            data = get_json(url, path)
-
-            if not isinstance(data, dict):
-                raise RuntimeError(f"Invalid chapter object: {url}")
-
-            actual = len(data)
-            if actual != expected_verses:
-                raise RuntimeError(
-                    f"{book} {chapter}: manifest says {expected_verses} "
-                    f"verses, source returned {actual}"
-                )
-
-            for verse, record in data.items():
-                if not str(verse).isdigit():
-                    raise RuntimeError(f"{url}: invalid verse {verse!r}")
-                validate_words(record, url, str(verse))
-
-            chapters[(book_id, book, chapter)] = data
-            files.append({
-                "file": str(path.relative_to(BUILD)),
-                "url": url,
-                "sha256": sha256(path),
-                "bytes": path.stat().st_size,
-                "verses": actual,
+        words = []
+        for node in verse.iter():
+            if local_name(node.tag) not in {"w", "seg"}:
+                continue
+            text = flatten_text(node)
+            if not text:
+                continue
+            tags = strong_tags(node)
+            morph = morphology(node)
+            words.append({
+                "text": text,
+                "strongs": tags,
+                "morphology": morph,
             })
 
-    return chapters, files
+        text = flatten_text(verse)
+        verses[(book_code, int(chapter), int(verse_no))] = {
+            "osis": osis_id,
+            "text": text,
+            "words": words,
+        }
 
-def generate_vault(chapters):
+    if len(verses) < 30000:
+        raise RuntimeError(
+            f"OSIS parse produced only {len(verses)} verses; expected ~31,102"
+        )
+    return verses
+
+def generate(verses: dict) -> dict:
     if VAULT.exists():
         shutil.rmtree(VAULT)
     (VAULT/"_meta").mkdir(parents=True)
@@ -197,55 +174,59 @@ def generate_vault(chapters):
         """---
 type: source
 translation: KJV
-layer: reference
+source: CrossWire KJV SWORD module
 ---
 
 # KJV + Strong's
 
-Generated from the BibleEngine static KJV + Strong's JSON dataset.
+Source: CrossWire KJV SWORD module.
 
-- KJV is reference-only.
-- This layer is not part of `bible_mt_tr.sqlite`.
-- Strong's tags are copied from the source.
-- The importer does not infer Strong's numbers.
-- One Markdown note is generated per verse.
+The CrossWire KJV module is the KJV 1769 with embedded Strong's numbers,
+morphology, and catchwords. Strong's tags are preserved as source data and
+are not inferred by this importer.
+
+This layer is **Obsidian-only** and is never stored in `bible_mt_tr.sqlite`.
 """, encoding="utf-8")
 
-    verses = words = tags = 0
+    count = words = tags = morphs = 0
 
-    for (book_id, book, chapter), data in chapters.items():
-        for verse, record in sorted(data.items(), key=lambda x: int(x[0])):
-            pairs = validate_words(
-                record,
-                STRONGS_URL.format(book=book_id, chapter=chapter),
-                str(verse),
-            )
-            verses += 1
-            words += len(pairs)
-            tags += sum(len(x) for _, x in pairs)
+    for (code, chapter, verse_no), data in sorted(
+        verses.items(), key=lambda x: (
+            BOOKS.index(x[0][0]), x[0][1], x[0][2]
+        )
+    ):
+        book = BOOK_MAP[code]
+        rows = ["| # | KJV word | Strong's | Morphology |",
+                "|---:|---|---|---|"]
+        rendered = []
 
-            rendered = []
-            table = ["| # | KJV word | Strong's |", "|---:|---|---|"]
-            for n, (surface, codes) in enumerate(pairs, 1):
-                links = " ".join(f"[[Strong's {code}]]" for code in codes)
-                rendered.append(f"**{surface}** {links}".strip())
-                table.append(f"| {n} | {surface} | {', '.join(codes)} |")
+        for i, item in enumerate(data["words"], 1):
+            s = ", ".join(item["strongs"])
+            m = ", ".join(item["morphology"])
+            rows.append(f"| {i} | {item['text']} | {s} | {m} |")
 
-            note = f"""---
+            links = " ".join(f"[[Strong's {x}]]" for x in item["strongs"])
+            rendered.append(f"**{item['text']}** {links}".strip())
+
+            words += 1
+            tags += len(item["strongs"])
+            morphs += len(item["morphology"])
+
+        note = f"""---
 type: verse
 translation: KJV
-source: BibleEngine
-book_id: {book_id}
+source: CrossWire
+osis: {data['osis']}
 book: {book}
 chapter: {chapter}
-verse: {verse}
+verse: {verse_no}
 ---
 
-# {book} {chapter}:{verse}
+# {book} {chapter}:{verse_no}
 
 ## KJV
 
-{record.get("t", "")}
+{data['text']}
 
 ## KJV + Strong's
 
@@ -253,63 +234,94 @@ verse: {verse}
 
 ## Word table
 
-{chr(10).join(table)}
+{chr(10).join(rows)}
 """
-            path = VAULT/"KJV"/book/str(chapter)/f"{int(verse):03d}.md"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(note, encoding="utf-8")
+        path = VAULT/"KJV"/book/str(chapter)/f"{verse_no:03d}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(note, encoding="utf-8")
+        count += 1
 
-    return {"books": 66, "verses": verses, "words": words, "strongs_tags": tags}
+    if count != 31102:
+        raise RuntimeError(f"Expected 31,102 verses, generated {count}")
+
+    return {
+        "books": 66,
+        "verses": count,
+        "words": words,
+        "strongs_tags": tags,
+        "morphology_tags": morphs,
+    }
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--crosswire-audit",
+        "--keep-raw",
         action="store_true",
-        help="Reserved for a later optional CrossWire audit; primary build is independent.",
+        help="Keep downloaded module and extracted OSIS files."
     )
     args = parser.parse_args()
 
-    if (BUILD/"bible_mt_tr.sqlite").exists():
+    sqlite = BUILD/"bible_mt_tr.sqlite"
+    if sqlite.exists():
         raise RuntimeError(
-            "Refusing to run: build/bible_mt_tr.sqlite exists. "
-            "This KJV importer must never touch the MT/TR SQLite build."
+            "Refusing to run because build/bible_mt_tr.sqlite exists. "
+            "KJV importer must never touch the MT/TR SQLite database."
         )
 
-    manifest_path = RAW/"manifest.json"
-    manifest = get_json(MANIFEST_URL, manifest_path)
-    books = parse_manifest(manifest)
+    BUILD.mkdir(parents=True, exist_ok=True)
+    RAW.mkdir(parents=True, exist_ok=True)
 
-    chapters, files = download_all(books)
-    report = generate_vault(chapters)
+    archive = RAW/"KJV.zip"
+    print("Downloading official CrossWire KJV module...")
+    download(MODULE_URL, archive)
 
-    if report["verses"] != 31102:
-        raise RuntimeError(
-            f"Expected 31,102 KJV verses, got {report['verses']}"
-        )
+    extract = RAW/"module"
+    if extract.exists():
+        shutil.rmtree(extract)
+    extract.mkdir()
 
-    report["primary_source"] = {
-        "name": "BibleEngine KJV + Strong's",
-        "url": "https://bibleengine.org/",
-        "manifest": MANIFEST_URL,
-        "endpoint": STRONGS_URL,
-        "verses": 31102,
-        "license": "CC0 for software/data format; Bible text and Strong's public domain",
-    }
-    report["crosswire_audit"] = (
-        "not-run" if not args.crosswire_audit
-        else "not required for primary build"
-    )
+    with zipfile.ZipFile(archive) as z:
+        z.extractall(extract)
+
+    xml_path = find_osis_xml(extract)
+    print(f"Parsing CrossWire OSIS: {xml_path}")
+    verses = parse_osis(xml_path)
+    report = generate(verses)
+
+    report.update({
+        "source": {
+            "name": "CrossWire KJV SWORD module",
+            "module": "KJV",
+            "version": "3.1",
+            "module_info": MODULE_INFO,
+            "download": MODULE_URL,
+            "archive_sha256": sha256(archive),
+        }
+    })
 
     (BUILD/"build_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2)+"\n",
-        encoding="utf-8")
+        encoding="utf-8"
+    )
     (BUILD/"source_manifest.json").write_text(
         json.dumps({
-            "primary": report["primary_source"],
-            "files": files,
+            "source": report["source"],
+            "archive": {
+                "file": str(archive.relative_to(BUILD)),
+                "sha256": sha256(archive),
+                "bytes": archive.stat().st_size,
+            },
+            "osis": {
+                "file": str(xml_path.relative_to(BUILD)),
+                "sha256": sha256(xml_path),
+                "bytes": xml_path.stat().st_size,
+            },
         }, ensure_ascii=False, indent=2)+"\n",
-        encoding="utf-8")
+        encoding="utf-8"
+    )
+
+    if not args.keep_raw:
+        shutil.rmtree(RAW)
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

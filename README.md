@@ -1,18 +1,25 @@
-# KJV + Strong's Obsidian Builder
+# KJV + Strong's — CrossWire importer
 
-This package builds the KJV + Strong's reference layer separately from the
-MT/TR SQLite database.
+This is the KJV + Strong's Obsidian reference layer.
 
-## Current source
+## Source
 
-The previous jsonBible endpoint was returning 404. The current public static
-source is **BibleEngine**, which documents these files:
+CrossWire SWORD module:
 
-- `https://bibleengine.org/v1/kjv/manifest.json`
-- `https://bibleengine.org/v1/kjvstrongs/{BB}/{CCC}.json`
+- Module: `KJV`
+- Version: `3.1`
+- Description: KJV 1769 with Strong's Numbers, Morphology, and CatchWords
+- Official module information:
+  https://www.crosswire.org/sword/modules/ModInfo.jsp?modName=KJV
 
-The manifest supplies the 66 books and per-chapter verse counts, so the builder
-does not guess chapter boundaries.
+The importer downloads the raw KJV SWORD module directly from CrossWire,
+extracts its OSIS/XML data, validates the parsed verse count, and generates
+31,102 Markdown verse notes.
+
+## Why this source
+
+Unlike an undocumented JSON API, the SWORD module is an established,
+versioned distribution artifact maintained by CrossWire.
 
 ## Output
 
@@ -20,24 +27,16 @@ does not guess chapter boundaries.
 build/
 ├── build_report.json
 ├── source_manifest.json
-├── raw/
 └── obsidian-kjv/
     └── KJV/
         └── Book/Chapter/Verse.md
 ```
 
-Validation requires 66 books and exactly 31,102 verses.
+## SQLite
 
-## SQLite separation
-
-The importer refuses to run if `build/bible_mt_tr.sqlite` exists and never
+The importer refuses to run when `build/bible_mt_tr.sqlite` exists and never
 opens or writes that database.
-
-## CrossWire
-
-CrossWire is not required for the primary build. This keeps the build from
-failing because an independent audit source is unavailable.
 
 ## Dependencies
 
-Python standard library only. No `requirements.txt` or pip packages.
+Python standard library only. No pip packages are required.
