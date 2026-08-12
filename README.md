@@ -1,20 +1,18 @@
 # KJV + Strong's Obsidian Builder
 
-Clean, dependency-free GitHub Actions builder for the KJV + Strong's reference
-layer.
+This package builds the KJV + Strong's reference layer separately from the
+MT/TR SQLite database.
 
-## Primary source
+## Current source
 
-jsonBible:
+The previous jsonBible endpoint was returning 404. The current public static
+source is **BibleEngine**, which documents these files:
 
-https://jsonbible.org/
+- `https://bibleengine.org/v1/kjv/manifest.json`
+- `https://bibleengine.org/v1/kjvstrongs/{BB}/{CCC}.json`
 
-Documented tagged endpoint:
-
-`https://jsonbible.org/v1/kjvstrongs/{book_id}/{chapter:03d}.json`
-
-The builder uses the published 66-book chapter map and downloads exactly the
-31,102 KJV verses. It does not use a nonexistent manifest endpoint.
+The manifest supplies the 66 books and per-chapter verse counts, so the builder
+does not guess chapter boundaries.
 
 ## Output
 
@@ -25,31 +23,21 @@ build/
 ├── raw/
 └── obsidian-kjv/
     └── KJV/
-        └── <Book>/<Chapter>/<Verse>.md
+        └── Book/Chapter/Verse.md
 ```
 
-One Markdown note is generated per verse.
-
-## CrossWire audit
-
-Optional:
-
-```bash
-python scripts/import_kjv_strongs.py --crosswire-audit
-```
-
-CrossWire is **audit-only**. If GitLab/CrossWire is unavailable, the primary
-jsonBible build still succeeds and the report records the audit as unavailable.
+Validation requires 66 books and exactly 31,102 verses.
 
 ## SQLite separation
 
-This builder refuses to run if `build/bible_mt_tr.sqlite` already exists and
-never writes to it.
+The importer refuses to run if `build/bible_mt_tr.sqlite` exists and never
+opens or writes that database.
 
-The KJV + Strong's layer is therefore kept separate from the MT/TR canonical
-SQLite database.
+## CrossWire
 
-## No pip dependencies
+CrossWire is not required for the primary build. This keeps the build from
+failing because an independent audit source is unavailable.
 
-The importer uses Python standard-library modules plus Git, which is already
-available on GitHub-hosted Ubuntu runners.
+## Dependencies
+
+Python standard library only. No `requirements.txt` or pip packages.
