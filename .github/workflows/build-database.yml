@@ -45,14 +45,29 @@ jobs:
       - name: Verify generated files
         run: |
           set -euo pipefail
-
           test -s build/bible_mt_tr.sqlite
           test -s build/build_report.json
           test -s build/source_manifest.json
           test -s build/SHA256SUMS
           test -d build/obsidian-vault
 
-          sqlite3 build/bible_mt_tr.sqlite             'PRAGMA integrity_check;' | grep -qx 'ok'
+      - name: Verify SQLite integrity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sqlite3
+          from pathlib import Path
+
+          db = Path("build/bible_mt_tr.sqlite")
+          con = sqlite3.connect(db)
+          result = con.execute("PRAGMA integrity_check").fetchone()[0]
+          con.close()
+
+          if result != "ok":
+              raise SystemExit(f"SQLite integrity check failed: {result}")
+
+          print("SQLite integrity check: ok")
+          PY
 
       - name: Package Obsidian vault
         run: |
@@ -63,7 +78,7 @@ jobs:
             zip -qr ../dist/obsidian-vault.zip obsidian-vault
           )
 
-      - name: Copy database and build metadata
+      - name: Copy build outputs
         run: |
           set -euo pipefail
           cp build/bible_mt_tr.sqlite dist/
