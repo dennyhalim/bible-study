@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
-report = json.loads((root/"build/build_report.json").read_text())
+report = json.loads((root/"build/build_report.json").read_text(encoding="utf-8"))
 
 assert report["books"] == 66
 assert report["verses"] == 31102
@@ -16,4 +16,4 @@ assert len(list(vault.rglob("*.md"))) == 31102
 
 assert not (root/"build/bible_mt_tr.sqlite").exists()
 
-print("PASS: CrossWire KJV / 66 books / 31,102 verses / SQLite untouched.")
+print("PASS: eBible KJV2006 / 66 books / 31,102 verses / Strong's / SQLite untouched.")

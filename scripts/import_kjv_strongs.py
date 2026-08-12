@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Build KJV + Strong's Obsidian notes from the official CrossWire KJV SWORD module.
+"""Build KJV + Strong's Obsidian notes from eBible.org KJV2006 USFX.
 
-The importer downloads the module archive from CrossWire, extracts its OSIS
-source, parses embedded Strong's/morphology markup, and creates one Markdown
-note per verse.
+Primary source:
+  https://ebible.org/Scriptures/eng-kjv2006_usfx.zip
 
-KJV remains Obsidian-only; bible_mt_tr.sqlite is never created or modified.
+eBible identifies ENGKJV / eng-kjv2006 as the standardized 1769 KJV with
+Strong's numbers added. The source is credited to CrossWire Bible Society.
+
+This importer never opens or writes bible_mt_tr.sqlite.
 """
 from __future__ import annotations
 
@@ -14,8 +16,7 @@ import hashlib
 import json
 import re
 import shutil
-import subprocess
-import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -23,46 +24,53 @@ from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
-RAW = BUILD / "raw" / "crosswire"
+RAW = BUILD / "raw" / "ebible"
 VAULT = BUILD / "obsidian-kjv"
 
-# CrossWire's official current KJV module page identifies KJV 3.1.
-# The module repository is the authoritative distribution source.
-MODULE_URL = "https://ftp.crosswire.org/sword/packages/rawzip/KJV.zip"
-MODULE_INFO = "https://www.crosswire.org/sword/modules/ModInfo.jsp?modName=KJV"
+SOURCE_PAGE = "https://ebible.org/find/show.php?id=eng-kjv2006"
+SOURCE_URL = "https://ebible.org/Scriptures/eng-kjv2006_usfx.zip"
 
 BOOKS = [
-    "Gen","Exod","Lev","Num","Deut","Josh","Judg","Ruth",
-    "1Sam","2Sam","1Kgs","2Kgs","1Chr","2Chr","Ezra","Neh",
-    "Esth","Job","Ps","Prov","Eccl","Song","Isa","Jer","Lam",
-    "Ezek","Dan","Hos","Joel","Amos","Obad","Jonah","Mic",
-    "Nah","Hab","Zeph","Hag","Zech","Mal","Matt","Mark","Luke",
-    "John","Acts","Rom","1Cor","2Cor","Gal","Eph","Phil","Col",
-    "1Thess","2Thess","1Tim","2Tim","Titus","Phlm","Heb","Jas",
-    "1Pet","2Pet","1John","2John","3John","Jude","Rev"
+    ("GEN", "Genesis"), ("EXO", "Exodus"), ("LEV", "Leviticus"),
+    ("NUM", "Numbers"), ("DEU", "Deuteronomy"), ("JOS", "Joshua"),
+    ("JDG", "Judges"), ("RUT", "Ruth"), ("1SA", "1 Samuel"),
+    ("2SA", "2 Samuel"), ("1KI", "1 Kings"), ("2KI", "2 Kings"),
+    ("1CH", "1 Chronicles"), ("2CH", "2 Chronicles"), ("EZR", "Ezra"),
+    ("NEH", "Nehemiah"), ("EST", "Esther"), ("JOB", "Job"),
+    ("PSA", "Psalms"), ("PRO", "Proverbs"), ("ECC", "Ecclesiastes"),
+    ("SNG", "Song of Solomon"), ("ISA", "Isaiah"), ("JER", "Jeremiah"),
+    ("LAM", "Lamentations"), ("EZK", "Ezekiel"), ("DAN", "Daniel"),
+    ("HOS", "Hosea"), ("JOL", "Joel"), ("AMO", "Amos"), ("OBA", "Obadiah"),
+    ("JON", "Jonah"), ("MIC", "Micah"), ("NAM", "Nahum"),
+    ("HAB", "Habakkuk"), ("ZEP", "Zephaniah"), ("HAG", "Haggai"),
+    ("ZEC", "Zechariah"), ("MAL", "Malachi"), ("MAT", "Matthew"),
+    ("MRK", "Mark"), ("LUK", "Luke"), ("JHN", "John"), ("ACT", "Acts"),
+    ("ROM", "Romans"), ("1CO", "1 Corinthians"), ("2CO", "2 Corinthians"),
+    ("GAL", "Galatians"), ("EPH", "Ephesians"), ("PHP", "Philippians"),
+    ("COL", "Colossians"), ("1TH", "1 Thessalonians"),
+    ("2TH", "2 Thessalonians"), ("1TI", "1 Timothy"), ("2TI", "2 Timothy"),
+    ("TIT", "Titus"), ("PHM", "Philemon"), ("HEB", "Hebrews"),
+    ("JAS", "James"), ("1PE", "1 Peter"), ("2PE", "2 Peter"),
+    ("1JN", "1 John"), ("2JN", "2 John"), ("3JN", "3 John"),
+    ("JUD", "Jude"), ("REV", "Revelation"),
 ]
-BOOK_NAMES = [
-    "Genesis","Exodus","Leviticus","Numbers","Deuteronomy","Joshua","Judges","Ruth",
-    "1 Samuel","2 Samuel","1 Kings","2 Kings","1 Chronicles","2 Chronicles","Ezra","Nehemiah",
-    "Esther","Job","Psalms","Proverbs","Ecclesiastes","Song of Solomon","Isaiah","Jeremiah",
-    "Lamentations","Ezekiel","Daniel","Hosea","Joel","Amos","Obadiah","Jonah","Micah","Nahum",
-    "Habakkuk","Zephaniah","Haggai","Zechariah","Malachi","Matthew","Mark","Luke","John","Acts",
-    "Romans","1 Corinthians","2 Corinthians","Galatians","Ephesians","Philippians","Colossians",
-    "1 Thessalonians","2 Thessalonians","1 Timothy","2 Timothy","Titus","Philemon","Hebrews",
-    "James","1 Peter","2 Peter","1 John","2 John","3 John","Jude","Revelation"
-]
-BOOK_MAP = dict(zip(BOOKS, BOOK_NAMES))
+BOOK_MAP = dict(BOOKS)
 
-NS = {"osis": "http://www.bibletechnologies.net/2003/OSIS/namespace"}
+def lname(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1].lower()
 
 def download(url: str, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "BibleStudy-CrossWire-KJV-Importer/1.0"}
+        headers={"User-Agent": "BibleStudy-KJV-Strong-Importer/1.0"}
     )
-    with urllib.request.urlopen(req, timeout=180) as r:
-        data = r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=180) as response:
+            data = response.read()
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")[:500]
+        raise RuntimeError(f"HTTP {exc.code} for {url}: {body}") from exc
     if not data:
         raise RuntimeError(f"Empty download: {url}")
     path.write_bytes(data)
@@ -74,149 +82,147 @@ def sha256(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-def local_name(tag: str) -> str:
-    return tag.rsplit("}", 1)[-1]
-
-def strong_tags(element: ET.Element) -> list[str]:
-    values = []
-    for node in element.iter():
-        for key, value in node.attrib.items():
-            if local_name(key).lower() in {"lemma", "strong"}:
-                for match in re.findall(r"[GH]\d{1,5}", value.upper()):
-                    if match not in values:
-                        values.append(match)
-    return values
-
-def morphology(element: ET.Element) -> list[str]:
-    values = []
-    for node in element.iter():
-        for key, value in node.attrib.items():
-            if local_name(key).lower() in {"morph", "morphology"}:
-                if value not in values:
-                    values.append(value)
-    return values
-
-def flatten_text(element: ET.Element) -> str:
+def clean_text(element: ET.Element) -> str:
     return " ".join("".join(element.itertext()).split())
 
-def find_osis_xml(extract_dir: Path) -> Path:
-    candidates = list(extract_dir.rglob("*.xml"))
-    preferred = [
-        p for p in candidates
-        if p.name.lower() in {"kjv.xml", "kjvfull.xml", "kjv-osis.xml"}
+def strongs_from_node(element: ET.Element) -> list[str]:
+    """Collect Strong's IDs from any USFX/USFM-derived attribute.
+
+    We intentionally inspect all attributes rather than assuming one vendor-
+    specific attribute name. This handles strong="H...", lemma="strong:H...",
+    x-strong="G...", and similar encodings.
+    """
+    found = []
+    for node in element.iter():
+        for value in node.attrib.values():
+            for tag in re.findall(r"\b[GH]\d{1,5}\b", value.upper()):
+                if tag not in found:
+                    found.append(tag)
+    return found
+
+def word_items(verse: ET.Element) -> list[dict]:
+    items = []
+
+    # Preferred word-level elements.
+    candidates = [
+        node for node in verse.iter()
+        if lname(node.tag) in {"w", "word", "zaln"}
     ]
-    if preferred:
-        return preferred[0]
-    if len(candidates) == 1:
-        return candidates[0]
-    raise RuntimeError(
-        "Could not uniquely identify CrossWire OSIS/XML source in module: "
-        + ", ".join(str(p.relative_to(extract_dir)) for p in candidates)
-    )
 
-def parse_osis(xml_path: Path) -> dict:
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
+    for node in candidates:
+        text = clean_text(node)
+        tags = strongs_from_node(node)
+        if text:
+            items.append({"text": text, "strongs": tags})
+
+    if items:
+        return items
+
+    # Fallback: retain verse text if the source uses another USFX encoding.
+    return [{"text": clean_text(verse), "strongs": strongs_from_node(verse)}]
+
+def parse_usfx(xml_path: Path) -> dict:
+    root = ET.parse(xml_path).getroot()
     verses = {}
+    current_book = None
+    current_chapter = None
 
-    for verse in root.iter():
-        if local_name(verse.tag) != "verse":
-            continue
+    for node in root.iter():
+        tag = lname(node.tag)
 
-        osis_id = verse.attrib.get("osisID") or verse.attrib.get("osisRef")
-        if not osis_id:
-            continue
+        if tag == "book":
+            raw = node.attrib.get("id") or node.attrib.get("code")
+            if raw:
+                current_book = raw.upper().split()[0]
 
-        # CrossWire uses IDs such as Gen.1.1. Ignore notes and non-canonical
-        # references by requiring book.chapter.verse.
-        m = re.fullmatch(r"([^.]+)\.(\d+)\.(\d+)", osis_id.split()[0])
-        if not m:
-            continue
+        elif tag in {"c", "chapter"}:
+            raw = node.attrib.get("id") or node.attrib.get("number")
+            if raw and str(raw).isdigit():
+                current_chapter = int(raw)
 
-        book_code, chapter, verse_no = m.groups()
-        if book_code not in BOOK_MAP:
-            continue
-
-        words = []
-        for node in verse.iter():
-            if local_name(node.tag) not in {"w", "seg"}:
+        elif tag in {"v", "verse"}:
+            raw = node.attrib.get("id") or node.attrib.get("number")
+            if not raw or not str(raw).isdigit():
                 continue
-            text = flatten_text(node)
-            if not text:
+            if current_book not in BOOK_MAP or current_chapter is None:
                 continue
-            tags = strong_tags(node)
-            morph = morphology(node)
-            words.append({
-                "text": text,
-                "strongs": tags,
-                "morphology": morph,
-            })
 
-        text = flatten_text(verse)
-        verses[(book_code, int(chapter), int(verse_no))] = {
-            "osis": osis_id,
-            "text": text,
-            "words": words,
-        }
+            verse_no = int(raw)
+            verses[(current_book, current_chapter, verse_no)] = {
+                "text": clean_text(node),
+                "words": word_items(node),
+            }
 
     if len(verses) < 30000:
         raise RuntimeError(
-            f"OSIS parse produced only {len(verses)} verses; expected ~31,102"
+            f"USFX parse produced {len(verses)} verses; expected 31,102. "
+            "The source structure may have changed."
         )
     return verses
+
+def locate_xml(directory: Path) -> Path:
+    files = list(directory.rglob("*.xml"))
+    if len(files) != 1:
+        raise RuntimeError(
+            "Expected exactly one XML file in USFX archive; found: "
+            + ", ".join(str(p.relative_to(directory)) for p in files)
+        )
+    return files[0]
 
 def generate(verses: dict) -> dict:
     if VAULT.exists():
         shutil.rmtree(VAULT)
-    (VAULT/"_meta").mkdir(parents=True)
+    (VAULT / "_meta").mkdir(parents=True)
 
-    (VAULT/"_meta/README.md").write_text(
-        """---
+    (VAULT / "_meta/README.md").write_text(
+        f"""---
 type: source
 translation: KJV
-source: CrossWire KJV SWORD module
+source: eBible.org
+edition: eng-kjv2006
 ---
 
 # KJV + Strong's
 
-Source: CrossWire KJV SWORD module.
+Source: [eBible.org KJV2006]({SOURCE_PAGE})
 
-The CrossWire KJV module is the KJV 1769 with embedded Strong's numbers,
-morphology, and catchwords. Strong's tags are preserved as source data and
-are not inferred by this importer.
+The source describes this edition as the standardized 1769 KJV, protocanon
+only, with Strong's numbers added.
 
-This layer is **Obsidian-only** and is never stored in `bible_mt_tr.sqlite`.
+Strong's numbers are preserved from the source. The importer does not infer
+or alter them.
+
+This vault is an Obsidian reference layer only. It is separate from
+`bible_mt_tr.sqlite`.
 """, encoding="utf-8")
 
-    count = words = tags = morphs = 0
+    count = words = tags = 0
 
     for (code, chapter, verse_no), data in sorted(
-        verses.items(), key=lambda x: (
-            BOOKS.index(x[0][0]), x[0][1], x[0][2]
-        )
+        verses.items(),
+        key=lambda item: (
+            next(i for i, (b, _) in enumerate(BOOKS) if b == item[0][0]),
+            item[0][1], item[0][2],
+        ),
     ):
         book = BOOK_MAP[code]
-        rows = ["| # | KJV word | Strong's | Morphology |",
-                "|---:|---|---|---|"]
         rendered = []
+        rows = ["| # | KJV word | Strong's |", "|---:|---|---|"]
 
         for i, item in enumerate(data["words"], 1):
-            s = ", ".join(item["strongs"])
-            m = ", ".join(item["morphology"])
-            rows.append(f"| {i} | {item['text']} | {s} | {m} |")
-
-            links = " ".join(f"[[Strong's {x}]]" for x in item["strongs"])
-            rendered.append(f"**{item['text']}** {links}".strip())
-
+            text = item["text"]
+            strongs = item["strongs"]
+            links = " ".join(f"[[Strong's {s}]]" for s in strongs)
+            rendered.append(f"**{text}** {links}".strip())
+            rows.append(f"| {i} | {text} | {', '.join(strongs)} |")
             words += 1
-            tags += len(item["strongs"])
-            morphs += len(item["morphology"])
+            tags += len(strongs)
 
         note = f"""---
 type: verse
 translation: KJV
-source: CrossWire
-osis: {data['osis']}
+source: eBible.org
+edition: eng-kjv2006
 book: {book}
 chapter: {chapter}
 verse: {verse_no}
@@ -226,7 +232,7 @@ verse: {verse_no}
 
 ## KJV
 
-{data['text']}
+{data["text"]}
 
 ## KJV + Strong's
 
@@ -236,7 +242,7 @@ verse: {verse_no}
 
 {chr(10).join(rows)}
 """
-        path = VAULT/"KJV"/book/str(chapter)/f"{verse_no:03d}.md"
+        path = VAULT / "KJV" / book / str(chapter) / f"{verse_no:03d}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(note, encoding="utf-8")
         count += 1
@@ -249,75 +255,67 @@ verse: {verse_no}
         "verses": count,
         "words": words,
         "strongs_tags": tags,
-        "morphology_tags": morphs,
     }
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--keep-raw",
-        action="store_true",
-        help="Keep downloaded module and extracted OSIS files."
-    )
+    parser.add_argument("--keep-raw", action="store_true")
     args = parser.parse_args()
 
-    sqlite = BUILD/"bible_mt_tr.sqlite"
+    sqlite = BUILD / "bible_mt_tr.sqlite"
     if sqlite.exists():
         raise RuntimeError(
-            "Refusing to run because build/bible_mt_tr.sqlite exists. "
-            "KJV importer must never touch the MT/TR SQLite database."
+            "Refusing to run: build/bible_mt_tr.sqlite exists. "
+            "KJV importer never touches the MT/TR SQLite database."
         )
 
-    BUILD.mkdir(parents=True, exist_ok=True)
-    RAW.mkdir(parents=True, exist_ok=True)
+    archive = RAW / "eng-kjv2006_usfx.zip"
+    extract = RAW / "source"
 
-    archive = RAW/"KJV.zip"
-    print("Downloading official CrossWire KJV module...")
-    download(MODULE_URL, archive)
-
-    extract = RAW/"module"
     if extract.exists():
         shutil.rmtree(extract)
-    extract.mkdir()
+    extract.mkdir(parents=True, exist_ok=True)
+
+    print("Downloading eBible.org KJV2006 USFX...")
+    download(SOURCE_URL, archive)
 
     with zipfile.ZipFile(archive) as z:
+        bad = [n for n in z.namelist() if Path(n).is_absolute() or ".." in Path(n).parts]
+        if bad:
+            raise RuntimeError(f"Unsafe ZIP paths detected: {bad[:3]}")
         z.extractall(extract)
 
-    xml_path = find_osis_xml(extract)
-    print(f"Parsing CrossWire OSIS: {xml_path}")
-    verses = parse_osis(xml_path)
+    xml_path = locate_xml(extract)
+    print(f"Parsing USFX: {xml_path}")
+
+    verses = parse_usfx(xml_path)
     report = generate(verses)
+    report["source"] = {
+        "provider": "eBible.org",
+        "id": "eng-kjv2006",
+        "edition": "King James Version, standardized 1769, protocanon",
+        "strongs": True,
+        "source_page": SOURCE_PAGE,
+        "download": SOURCE_URL,
+        "archive_sha256": sha256(archive),
+        "archive_bytes": archive.stat().st_size,
+        "xml_sha256": sha256(xml_path),
+        "xml_bytes": xml_path.stat().st_size,
+    }
 
-    report.update({
-        "source": {
-            "name": "CrossWire KJV SWORD module",
-            "module": "KJV",
-            "version": "3.1",
-            "module_info": MODULE_INFO,
-            "download": MODULE_URL,
-            "archive_sha256": sha256(archive),
-        }
-    })
-
-    (BUILD/"build_report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2)+"\n",
-        encoding="utf-8"
+    (BUILD / "build_report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
-    (BUILD/"source_manifest.json").write_text(
+    (BUILD / "source_manifest.json").write_text(
         json.dumps({
             "source": report["source"],
-            "archive": {
-                "file": str(archive.relative_to(BUILD)),
-                "sha256": sha256(archive),
-                "bytes": archive.stat().st_size,
+            "validation": {
+                "expected_books": 66,
+                "expected_verses": 31102,
             },
-            "osis": {
-                "file": str(xml_path.relative_to(BUILD)),
-                "sha256": sha256(xml_path),
-                "bytes": xml_path.stat().st_size,
-            },
-        }, ensure_ascii=False, indent=2)+"\n",
-        encoding="utf-8"
+        }, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
 
     if not args.keep_raw:

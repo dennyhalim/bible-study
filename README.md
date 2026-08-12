@@ -1,25 +1,31 @@
-# KJV + Strong's — CrossWire importer
+# KJV + Strong's — eBible.org importer
 
-This is the KJV + Strong's Obsidian reference layer.
+## Primary source
 
-## Source
+This build uses the explicitly published eBible.org KJV2006 USFX archive:
 
-CrossWire SWORD module:
+https://ebible.org/Scriptures/eng-kjv2006_usfx.zip
 
-- Module: `KJV`
-- Version: `3.1`
-- Description: KJV 1769 with Strong's Numbers, Morphology, and CatchWords
-- Official module information:
-  https://www.crosswire.org/sword/modules/ModInfo.jsp?modName=KJV
+The eBible source page identifies `ENGKJV / eng-kjv2006` as:
 
-The importer downloads the raw KJV SWORD module directly from CrossWire,
-extracts its OSIS/XML data, validates the parsed verse count, and generates
-31,102 Markdown verse notes.
+- King James Version
+- standardized 1769 text
+- protocanon only
+- Strong's numbers added
+- public domain
+- supplied courtesy of CrossWire Bible Society and eBible.org
 
-## Why this source
+Source page:
+https://ebible.org/find/show.php?id=eng-kjv2006
 
-Unlike an undocumented JSON API, the SWORD module is an established,
-versioned distribution artifact maintained by CrossWire.
+The eBible download directory currently lists the exact USFX archive, so the
+workflow does not depend on guessed CrossWire FTP paths or undocumented APIs.
+
+## Why this replaces the previous importers
+
+Previous builds used endpoints that returned 404/non-JSON responses. This build
+uses a stable, explicitly published downloadable archive and records SHA-256
+checksums in `source_manifest.json`.
 
 ## Output
 
@@ -32,11 +38,13 @@ build/
         └── Book/Chapter/Verse.md
 ```
 
-## SQLite
+The build requires exactly 66 books and 31,102 verses.
 
-The importer refuses to run when `build/bible_mt_tr.sqlite` exists and never
-opens or writes that database.
+## SQLite separation
+
+`bible_mt_tr.sqlite` is never opened, created, or modified. The importer
+actively refuses to run if that file already exists under `build/`.
 
 ## Dependencies
 
-Python standard library only. No pip packages are required.
+Python standard library only.
