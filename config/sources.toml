@@ -1,0 +1,16 @@
+# Canonical public/open sources used by the pipeline.
+# URLs are kept here so the build is reproducible and auditable.
+
+[stepbible]
+base = "https://raw.githubusercontent.com/STEPBible/STEPBible-Data/master"
+
+[openscriptures]
+hebrew_lexicon = "https://github.com/openscriptures/HebrewLexicon"
+morphhb = "https://github.com/openscriptures/morphhb"
+
+[kjv]
+# KJV+Strong's must be supplied from a machine-readable public/open dataset.
+# The importer intentionally refuses to invent Strong's tagging.
+# Set this URL to the exact dataset you have approved.
+url = ""
+license = ""

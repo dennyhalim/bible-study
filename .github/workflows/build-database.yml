@@ -1,0 +1,87 @@
+name: Build Bible MT/TR + Obsidian
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 1 * *"
+  push:
+    paths:
+      - "scripts/**"
+      - "config/**"
+      - "tests/**"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bible-data-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build MT/TR SQLite and Obsidian vault
+        run: |
+          set -euo pipefail
+          python scripts/build_pipeline.py --fresh
+
+      - name: Validate database
+        run: |
+          set -euo pipefail
+          python tests/test_database.py
+
+      - name: Verify generated files
+        run: |
+          set -euo pipefail
+
+          test -s build/bible_mt_tr.sqlite
+          test -s build/build_report.json
+          test -s build/source_manifest.json
+          test -s build/SHA256SUMS
+          test -d build/obsidian-vault
+
+          sqlite3 build/bible_mt_tr.sqlite             'PRAGMA integrity_check;' | grep -qx 'ok'
+
+      - name: Package Obsidian vault
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          (
+            cd build
+            zip -qr ../dist/obsidian-vault.zip obsidian-vault
+          )
+
+      - name: Copy database and build metadata
+        run: |
+          set -euo pipefail
+          cp build/bible_mt_tr.sqlite dist/
+          cp build/build_report.json dist/
+          cp build/source_manifest.json dist/
+          cp build/SHA256SUMS dist/
+
+      - name: Generate artifact checksums
+        run: |
+          set -euo pipefail
+          sha256sum dist/* > dist/ARTIFACT-SHA256SUMS
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bible-mt-tr-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
