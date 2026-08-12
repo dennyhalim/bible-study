@@ -1,41 +1,40 @@
-# Bible MT/TR Build Pipeline
+# KJV + Strong's Obsidian Adapter
 
-Produces:
+This adapter adds the KJV + Strong's reference layer to the Obsidian build.
 
-- `build/bible_mt_tr.sqlite` — canonical MT/TR lexical/morphological database
-- `build/obsidian-vault/` — derived Obsidian vault
-- `build/build_report.json`
-- `build/source_manifest.json`
-- `build/SHA256SUMS`
+## Source
 
-## KJV policy
+Primary: jsonBible `kjvstrongs`.
 
-KJV is **not imported into SQLite**.
+Secondary: CrossWire KJV OSIS, optionally downloaded for independent audit.
 
-KJV + Strong's belongs only in the generated Obsidian layer. The pipeline refuses
-to invent Strong's tags. A verified machine-readable KJV+Strong's dataset must be
-configured before the KJV adapter is enabled.
+jsonBible documents the tagged endpoint as:
+
+`https://jsonbible.org/v1/kjvstrongs/{book}/{chapter}.json`
+
+The tagged records contain the reading text and ordered word arrays with Strong's
+numbers.
+
+## SQLite policy
+
+This adapter does **not** write KJV data into `bible_mt_tr.sqlite`.
+
+KJV remains an Obsidian-only reference layer.
+
+## Run locally
+
+```bash
+python scripts/import_kjv_strongs.py --download-crosswire
+python tests/test_kjv.py
+```
 
 ## GitHub Actions
 
-The workflow runs manually, on source-code changes, and monthly.
+The workflow builds the vault, validates it, and uploads:
 
-It validates the SQLite database and uploads the database, vault ZIP, report,
-manifest and checksums as workflow artifacts.
+- `kjv-strongs-obsidian.zip`
+- `build_report.json`
+- `source_manifest.json`
+- `SHA256SUMS`
 
-## Next adapter layer
-
-The repository structure intentionally separates source adapters from the schema.
-Pin exact STEPBible/Open Scriptures files and add format-specific parsers for:
-
-- TAGNT/TR
-- TAHOT/WLC
-- TBESG
-- TBESH
-- TFLSJ
-- TEGMC
-- TEHMC
-- Open Scriptures BDB/Strong's
-
-Do not substitute a different Greek NT or Hebrew text without recording it as a
-different edition/source.
+The workflow does not modify the canonical MT/TR SQLite database.

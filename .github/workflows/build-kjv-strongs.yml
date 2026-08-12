@@ -1,0 +1,81 @@
+name: Build KJV + Strong's Obsidian layer
+
+on:
+  workflow_dispatch:
+    inputs:
+      crosswire_audit:
+        description: "Download CrossWire OSIS for independent audit"
+        required: false
+        default: true
+        type: boolean
+  schedule:
+    - cron: "47 2 1 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kjv-strongs-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build KJV + Strong's Obsidian vault
+        env:
+          CROSSWIRE_AUDIT: ${{ inputs.crosswire_audit || 'true' }}
+        run: |
+          set -euo pipefail
+          args=""
+          if [ "$CROSSWIRE_AUDIT" = "true" ]; then
+            args="--download-crosswire"
+          fi
+          python scripts/import_kjv_strongs.py $args
+
+      - name: Validate output
+        run: |
+          set -euo pipefail
+          test -s build/build_report.json
+          test -s build/source_manifest.json
+          test -d build/obsidian-kjv
+          test "$(find build/obsidian-kjv/KJV -name '*.md' | wc -l)" -gt 30000
+
+      - name: Verify SQLite is untouched
+        run: |
+          set -euo pipefail
+          if [ -e build/bible_mt_tr.sqlite ]; then
+            echo "This workflow must not modify the canonical SQLite database."
+            exit 1
+          fi
+
+      - name: Package vault
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          (
+            cd build
+            zip -qr ../dist/kjv-strongs-obsidian.zip obsidian-kjv
+          )
+          cp build/build_report.json dist/
+          cp build/source_manifest.json dist/
+          sha256sum dist/* > dist/SHA256SUMS
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kjv-strongs-obsidian-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

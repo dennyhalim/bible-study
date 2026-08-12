@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+import json
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+report = json.loads((root/"build/build_report.json").read_text(encoding="utf-8"))
+assert report["verses"] >= 30000
+assert report["words"] > 0
+assert report["strongs_tags"] > 0
+
+vault = root/"build/obsidian-kjv/KJV"
+assert vault.is_dir()
+assert len(list(vault.rglob("*.md"))) >= 30000
+
+for p in list(vault.rglob("*.md"))[:100]:
+    text = p.read_text(encoding="utf-8")
+    assert "type: kjv" in text
+    assert "sqlite_role: reference_only" in text
+
+print("KJV+Strong's Obsidian validation passed.")
