@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       crosswire_audit:
-        description: "Download CrossWire OSIS for independent audit"
+        description: Download CrossWire OSIS for independent audit
         required: false
         default: true
         type: boolean
@@ -37,11 +37,11 @@ jobs:
           CROSSWIRE_AUDIT: ${{ inputs.crosswire_audit || 'true' }}
         run: |
           set -euo pipefail
-          args=""
+          args=()
           if [ "$CROSSWIRE_AUDIT" = "true" ]; then
-            args="--download-crosswire"
+            args+=(--download-crosswire)
           fi
-          python scripts/import_kjv_strongs.py $args
+          python scripts/import_kjv_strongs.py "${args[@]}"
 
       - name: Validate output
         run: |
@@ -49,13 +49,21 @@ jobs:
           test -s build/build_report.json
           test -s build/source_manifest.json
           test -d build/obsidian-kjv
-          test "$(find build/obsidian-kjv/KJV -name '*.md' | wc -l)" -gt 30000
+          test -d build/obsidian-kjv/KJV
 
-      - name: Verify SQLite is untouched
+          verses="$(python - <<'PY'
+          import json
+          print(json.load(open("build/build_report.json", encoding="utf-8"))["verses"])
+          PY
+          )"
+
+          test "$verses" -eq 31102
+
+      - name: Verify SQLite is not modified
         run: |
           set -euo pipefail
           if [ -e build/bible_mt_tr.sqlite ]; then
-            echo "This workflow must not modify the canonical SQLite database."
+            echo "ERROR: KJV workflow must not create or modify the canonical SQLite database."
             exit 1
           fi
 
