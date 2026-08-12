@@ -1,40 +1,55 @@
-# KJV + Strong's Obsidian Adapter
+# KJV + Strong's Obsidian Builder
 
-This adapter adds the KJV + Strong's reference layer to the Obsidian build.
+Clean, dependency-free GitHub Actions builder for the KJV + Strong's reference
+layer.
 
-## Source
+## Primary source
 
-Primary: jsonBible `kjvstrongs`.
+jsonBible:
 
-Secondary: CrossWire KJV OSIS, optionally downloaded for independent audit.
+https://jsonbible.org/
 
-jsonBible documents the tagged endpoint as:
+Documented tagged endpoint:
 
-`https://jsonbible.org/v1/kjvstrongs/{book}/{chapter}.json`
+`https://jsonbible.org/v1/kjvstrongs/{book_id}/{chapter:03d}.json`
 
-The tagged records contain the reading text and ordered word arrays with Strong's
-numbers.
+The builder uses the published 66-book chapter map and downloads exactly the
+31,102 KJV verses. It does not use a nonexistent manifest endpoint.
 
-## SQLite policy
+## Output
 
-This adapter does **not** write KJV data into `bible_mt_tr.sqlite`.
-
-KJV remains an Obsidian-only reference layer.
-
-## Run locally
-
-```bash
-python scripts/import_kjv_strongs.py --download-crosswire
-python tests/test_kjv.py
+```text
+build/
+├── build_report.json
+├── source_manifest.json
+├── raw/
+└── obsidian-kjv/
+    └── KJV/
+        └── <Book>/<Chapter>/<Verse>.md
 ```
 
-## GitHub Actions
+One Markdown note is generated per verse.
 
-The workflow builds the vault, validates it, and uploads:
+## CrossWire audit
 
-- `kjv-strongs-obsidian.zip`
-- `build_report.json`
-- `source_manifest.json`
-- `SHA256SUMS`
+Optional:
 
-The workflow does not modify the canonical MT/TR SQLite database.
+```bash
+python scripts/import_kjv_strongs.py --crosswire-audit
+```
+
+CrossWire is **audit-only**. If GitLab/CrossWire is unavailable, the primary
+jsonBible build still succeeds and the report records the audit as unavailable.
+
+## SQLite separation
+
+This builder refuses to run if `build/bible_mt_tr.sqlite` already exists and
+never writes to it.
+
+The KJV + Strong's layer is therefore kept separate from the MT/TR canonical
+SQLite database.
+
+## No pip dependencies
+
+The importer uses Python standard-library modules plus Git, which is already
+available on GitHub-hosted Ubuntu runners.
