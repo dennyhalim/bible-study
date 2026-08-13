@@ -1,0 +1,84 @@
+name: Deploy Bible SQLite to Cloudflare D1
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Build Bible Study Corpus"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SQLite
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+
+      - name: Build validated SQLite
+        run: |
+          set -euo pipefail
+          test -s data/bible_mt_tr.sqlite
+          mkdir -p build
+          cp data/bible_mt_tr.sqlite build/bible_mt_tr.sqlite
+          sqlite3 build/bible_mt_tr.sqlite 'PRAGMA integrity_check;' | grep -qx ok
+
+      - name: Generate D1 SQL
+        run: |
+          set -euo pipefail
+          python scripts/export_d1.py
+          python scripts/validate_d1.py
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Wrangler
+        run: npm install --global wrangler@latest
+
+      - name: Deploy to D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
+        run: |
+          set -euo pipefail
+          test -n "$D1_DATABASE_NAME"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+
+          npx wrangler d1 execute "$D1_DATABASE_NAME" \
+            --remote \
+            --file=build/d1/bible_mt_tr.sql \
+            --yes
+
+      - name: Verify remote D1
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute "$D1_DATABASE_NAME" \
+            --remote \
+            --command="SELECT
+              (SELECT COUNT(*) FROM book) AS books,
+              (SELECT COUNT(*) FROM verse) AS verses,
+              (SELECT COUNT(*) FROM word) AS words;" \
+            --json

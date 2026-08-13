@@ -1,0 +1,7 @@
+name = "bible-study-api"
+compatibility_date = "2026-08-13"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bible-mt-tr"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
