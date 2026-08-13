@@ -2,9 +2,9 @@ name: Deploy Bible SQLite to Cloudflare D1
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Build Bible Study Corpus"]
-    types: [completed]
+#  workflow_run:
+#    workflows: ["Build Bible Study Corpus"]
+#    types: [completed]
 
 permissions:
   contents: read
