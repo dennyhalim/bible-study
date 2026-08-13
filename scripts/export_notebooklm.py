@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Export compact, self-contained Markdown sources for NotebookLM/Gemini."""
+"""Export compact Markdown sources for NotebookLM/Gemini with live progress."""
 from pathlib import Path
-import json, shutil, sqlite3
+import json, shutil, sqlite3, time
 
 ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "build/bible_mt_tr.sqlite"
 OUT = ROOT / "build/notebooklm"
 
 def main():
+    start = time.monotonic()
     if not DB.is_file():
         raise SystemExit(f"Missing database: {DB}")
 
@@ -18,8 +19,11 @@ def main():
     books = con.execute(
         "SELECT book_id, name FROM book ORDER BY ordinal"
     ).fetchall()
+    total = len(books)
 
-    for book_id, name in books:
+    print(f"[Gemini] Starting export: {total} books", flush=True)
+
+    for index, (book_id, name) in enumerate(books, 1):
         rows = con.execute(
             """SELECT v.chapter,v.verse,v.text_kjv,
                       w.surface,w.strongs_json,w.lemma,w.morphology
@@ -31,24 +35,20 @@ def main():
         ).fetchall()
 
         lines = [
-            f"# {name} — KJV + Strong's",
-            "",
+            f"# {name} — KJV + Strong's", "",
             "Source: KJV2006 USFX. Strong's tags are preserved from the source.",
             "Lemma/morphology fields are left empty until verified TR/MT datasets are imported.",
-            "",
+            ""
         ]
 
         current = None
         for chapter, verse, text, surface, strongs_json, lemma, morphology in rows:
             key = (chapter, verse)
             if key != current:
-                lines += [
-                    f"## {name} {chapter}:{verse}",
-                    "",
-                    f"KJV: {text}",
-                    "",
-                    "Word alignment:",
-                ]
+                if current is not None:
+                    lines.append("")
+                lines += [f"## {name} {chapter}:{verse}", "", f"KJV: {text}", "",
+                           "Word alignment:"]
                 current = key
 
             if surface:
@@ -61,14 +61,20 @@ def main():
                 extra = f"; {'; '.join(details)}" if details else ""
                 lines.append(f"- {surface} -> {ids}{extra}")
 
-            if key != (chapter, verse):
-                lines.append("")
-
         (OUT / f"{name}.md").write_text(
             "\n".join(lines) + "\n", encoding="utf-8"
         )
 
-    index = ["# Strong's occurrence index", ""]
+        elapsed = time.monotonic() - start
+        print(
+            f"[Gemini] {index}/{total} ({index/total*100:.1f}%) — "
+            f"{name} — {elapsed:.1f}s elapsed",
+            flush=True
+        )
+
+    print("[Gemini] Building Strong's occurrence index", flush=True)
+
+    index_lines = ["# Strong's occurrence index", ""]
     ids = con.execute("""
         SELECT DISTINCT json_each.value
         FROM word, json_each(word.strongs_json)
@@ -76,7 +82,8 @@ def main():
         ORDER BY json_each.value
     """).fetchall()
 
-    for (sid,) in ids:
+    total_ids = len(ids)
+    for index, (sid,) in enumerate(ids, 1):
         refs = con.execute(
             """SELECT DISTINCT b.name,v.chapter,v.verse
                FROM word w
@@ -89,16 +96,29 @@ def main():
                ORDER BY b.ordinal,v.chapter,v.verse""",
             (sid,)
         ).fetchall()
-        index += [
+        index_lines += [
             f"## {sid}",
-            ", ".join(f"{b} {c}:{v}" for b,c,v in refs),
-            "",
+            ", ".join(f"{b} {c}:{v}" for b,c,v in refs), ""
         ]
 
+        if index == 1 or index % 100 == 0 or index == total_ids:
+            print(
+                f"[Gemini] Strong's index {index}/{total_ids} "
+                f"({index/total_ids*100:.1f}%)",
+                flush=True
+            )
+
     (OUT / "Strong's occurrence index.md").write_text(
-        "\n".join(index) + "\n", encoding="utf-8"
+        "\n".join(index_lines) + "\n", encoding="utf-8"
     )
     con.close()
+
+    elapsed = time.monotonic() - start
+    print(
+        f"[Gemini] COMPLETE — {total} book files + Strong's index — "
+        f"{elapsed:.1f}s",
+        flush=True
+    )
 
 if __name__ == "__main__":
     main()

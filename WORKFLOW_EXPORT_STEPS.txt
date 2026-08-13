@@ -1,0 +1,12 @@
+# Replace the two export steps in .github/workflows/build-bible.yml
+# with these commands if the repository already has the workflow.
+
+- name: Generate Obsidian export
+  run: |
+    set -euo pipefail
+    python scripts/export_obsidian.py
+
+- name: Generate NotebookLM/Gemini export
+  run: |
+    set -euo pipefail
+    python scripts/export_notebooklm.py
