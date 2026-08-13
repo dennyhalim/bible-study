@@ -1,50 +1,34 @@
 name: Build KJV + Strong's Obsidian
-
 on:
   workflow_dispatch:
     inputs:
       refresh_source:
-        description: "Try to refresh the committed KJV source"
+        description: Download, validate, and commit KJV source
         required: false
         default: false
         type: boolean
   schedule:
     - cron: "47 2 1 * *"
-
 permissions:
   contents: write
-
-concurrency:
-  group: kjv-strongs
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Build KJV + Strong's
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Build
         env:
-          REFRESH_SOURCE: ${{ github.event.inputs.refresh_source || 'false' }}
+          REFRESH: ${{ github.event.inputs.refresh_source || 'false' }}
         run: |
           set -euo pipefail
-          if [ "$REFRESH_SOURCE" = "true" ]; then
+          if [ "$REFRESH" = "true" ]; then
             python scripts/import_kjv_strongs.py --refresh
           else
             python scripts/import_kjv_strongs.py
           fi
-
       - name: Validate
         run: |
           set -euo pipefail
@@ -54,35 +38,25 @@ jobs:
           test -d build/obsidian-kjv/KJV
           test ! -e build/bible_mt_tr.sqlite
           python tests/test_kjv.py
-
       - name: Commit refreshed source
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.refresh_source == 'true'
         run: |
           set -euo pipefail
-          if git diff --quiet -- vendor/kjv2006/eng-kjv2006_usfx.xml; then
-            echo "No source change."
-            exit 0
-          fi
+          if git diff --quiet -- vendor/kjv2006/eng-kjv2006_usfx.xml; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add vendor/kjv2006/eng-kjv2006_usfx.xml
-          git commit -m "chore(data): refresh KJV2006 Strong's source"
+          git commit -m "chore(data): refresh KJV2006 USFX source"
           git push
-
       - name: Package
         run: |
           set -euo pipefail
-          rm -rf dist
-          mkdir -p dist
+          rm -rf dist && mkdir dist
           (cd build && zip -qr ../dist/kjv-strongs-obsidian.zip obsidian-kjv)
           cp build/build_report.json build/source_manifest.json dist/
           sha256sum dist/* > dist/SHA256SUMS
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: kjv-strongs-obsidian-${{ github.sha }}
           path: dist/
           if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
