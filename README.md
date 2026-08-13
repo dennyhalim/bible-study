@@ -1,28 +1,34 @@
-# Fast Obsidian exporter
+# Fast Gemini / NotebookLM exporter
 
-The Strong's export no longer performs one SQLite query per Strong's ID.
+The exporter performs one bulk SQLite query for all Strong's occurrences,
+then groups the data in Python.
 
-It uses one `json_each()` query to load all occurrences, groups them in Python,
-and writes merged files containing up to 1,000 Strong's IDs each.
-
-Default:
-
-```bash
-python scripts/export_obsidian.py
-```
-
-Change the batch size:
-
-```bash
-python scripts/export_obsidian.py --strongs-per-file 2000
-```
-
-The KJV remains one file per chapter. Strong's is merged into range files such as:
+Default output:
 
 ```text
-Strong's/G0000-0999.md
-Strong's/G1000-1999.md
-Strong's/H0000-0999.md
+build/notebooklm/
+├── Genesis.md
+├── Exodus.md
+├── ...
+├── Revelation.md
+└── Strongs/
+    ├── G0000-1999.md
+    ├── G2000-3999.md
+    ├── G4000-5999.md
+    └── H0000-9999.md
 ```
 
-Individual Strong's entries remain headings, so links can target `#G1234`.
+Run:
+
+```bash
+python scripts/export_notebooklm.py
+```
+
+Change the Strong's batch size:
+
+```bash
+python scripts/export_notebooklm.py --strongs-per-file 5000
+```
+
+Book files remain separate because they are better retrieval units for
+Gemini/NotebookLM than one enormous Markdown source.

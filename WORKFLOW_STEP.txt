@@ -1,6 +1,6 @@
-Replace the existing Obsidian step with:
+Replace the Gemini/NotebookLM workflow step with:
 
-- name: Generate Obsidian export
+- name: Generate Gemini/NotebookLM export
   run: |
     set -euo pipefail
-    python scripts/export_obsidian.py --strongs-per-file 1000
+    python scripts/export_notebooklm.py --strongs-per-file 2000
