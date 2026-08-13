@@ -32,10 +32,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install SQLite
+      - name: Install SQLite CLI
         run: sudo apt-get update && sudo apt-get install -y sqlite3
 
-      - name: Preserve previous database
+      - name: Preserve previous committed database
         run: |
           set -euo pipefail
           mkdir -p build
@@ -43,7 +43,7 @@ jobs:
             cp data/bible_mt_tr.sqlite build/previous.sqlite
           fi
 
-      - name: Download or use committed sources
+      - name: Download or validate committed sources
         env:
           REFRESH: ${{ github.event.inputs.refresh_sources || 'false' }}
         run: |
@@ -54,24 +54,10 @@ jobs:
             python scripts/download_sources.py
           fi
 
-      - name: Build fresh SQLite
+      - name: Build temporary SQLite
         run: |
           set -euo pipefail
           python scripts/build_sqlite.py
-
-      - name: Validate fresh SQLite
-        run: |
-          set -euo pipefail
-          test -s build/bible_mt_tr.sqlite
-          sqlite3 build/bible_mt_tr.sqlite 'PRAGMA integrity_check;' | grep -qx ok
-          python scripts/validate.py
-
-      - name: Promote validated SQLite
-        run: |
-          set -euo pipefail
-          mkdir -p data
-          cp build/bible_mt_tr.sqlite data/bible_mt_tr.sqlite
-          sqlite3 data/bible_mt_tr.sqlite 'PRAGMA integrity_check;' | grep -qx ok
 
       - name: Generate Obsidian export
         run: |
@@ -83,7 +69,20 @@ jobs:
           set -euo pipefail
           python scripts/export_notebooklm.py
 
-      - name: Commit validated database and refreshed sources
+      - name: Validate complete build
+        run: |
+          set -euo pipefail
+          python scripts/validate.py
+          sqlite3 build/bible_mt_tr.sqlite 'PRAGMA integrity_check;' | grep -qx ok
+
+      - name: Promote validated SQLite
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          cp build/bible_mt_tr.sqlite data/bible_mt_tr.sqlite
+          sqlite3 data/bible_mt_tr.sqlite 'PRAGMA integrity_check;' | grep -qx ok
+
+      - name: Commit validated database and source
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -92,13 +91,13 @@ jobs:
           git add data/bible_mt_tr.sqlite vendor/
 
           if git diff --cached --quiet; then
-            echo "No committed data changes."
+            echo "No database/source changes."
           else
             git commit -m "chore(data): update Bible corpus"
             git push
           fi
 
-      - name: Package generated exports
+      - name: Package generated outputs
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -107,7 +106,7 @@ jobs:
           (cd build && zip -qr ../dist/notebooklm.zip notebooklm)
           sha256sum dist/* > dist/SHA256SUMS
 
-      - name: Upload build artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: bible-study-${{ github.sha }}

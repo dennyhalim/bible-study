@@ -1,24 +1,31 @@
-# Bible Study committed-data pipeline
+# Bible Study corpus pipeline
 
-`data/bible_mt_tr.sqlite` is the committed, last-known-good SQLite snapshot.
+## Canonical data
 
-The GitHub Actions workflow:
+`data/bible_mt_tr.sqlite` is the committed, last-known-good database.
 
-1. preserves the previous database;
-2. optionally refreshes the committed source;
-3. builds a new SQLite database in `build/`;
-4. validates it;
-5. only then copies it to `data/bible_mt_tr.sqlite`;
-6. commits the validated database and refreshed source.
+`vendor/kjv2006/eng-kjv2006_usfx.xml` is the committed KJV2006 source fallback.
 
-A failed download does **not** delete the previous source.
+The workflow never promotes an unvalidated database.
 
-A failed SQLite build does **not** replace the committed database.
+## Outputs
 
-The source expected by the importer is:
+- `data/bible_mt_tr.sqlite` — canonical committed SQLite
+- `build/obsidian/` — chapter-level Obsidian vault plus Strong's notes
+- `build/notebooklm/` — 66 book sources plus a Strong's occurrence index
+- GitHub Actions artifacts contain SQLite + both exports
+
+## Important
+
+The importer does not invent lemma or morphology. Those fields are reserved for
+the verified TR/MT lexical and morphology datasets.
+
+Put your existing validated source files into:
 
 `vendor/kjv2006/eng-kjv2006_usfx.xml`
 
-Do not fabricate or substitute another KJV XML filename.
+and, if already available:
 
-The schema reserves `lemma` and `morphology` for verified TR/MT imports; empty values are preferable to invented lexical data.
+`data/bible_mt_tr.sqlite`
+
+before the first workflow run.

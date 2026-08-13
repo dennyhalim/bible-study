@@ -1,1 +1,1 @@
-Commit the validated bible_mt_tr.sqlite here. The workflow updates it only after validation.
+Committed canonical SQLite goes here: data/bible_mt_tr.sqlite

@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-"""Validate the committed source and optionally refresh it.
-
-A failed refresh never destroys the last known-good committed source.
-"""
+"""Refresh the committed KJV2006 USFX source, with safe fallback."""
 from pathlib import Path
-import hashlib
-import json
-import shutil
-import sys
-import urllib.request
-import zipfile
+import hashlib, json, shutil, sys, urllib.request, zipfile
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,8 +26,8 @@ def refresh():
     work = ROOT / "build/source-refresh"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-
     archive = work / "source.zip"
+
     req = urllib.request.Request(URL, headers={"User-Agent": "BibleStudy/1.0"})
     with urllib.request.urlopen(req, timeout=180) as response:
         archive.write_bytes(response.read())
@@ -45,7 +37,7 @@ def refresh():
     with zipfile.ZipFile(archive) as z:
         hits = [n for n in z.namelist() if Path(n).name == EXPECTED]
         if len(hits) != 1:
-            raise RuntimeError(f"Expected {EXPECTED}; found {hits}")
+            raise RuntimeError(f"Expected exactly {EXPECTED}; found {hits}")
         z.extract(hits[0], extract)
         candidate = extract / hits[0]
 
@@ -73,9 +65,9 @@ def main():
         "sha256": digest,
         "acquisition": mode,
     }, indent=2) + "\n", encoding="utf-8")
-    print(f"Source: {SOURCE}")
-    print(f"SHA256: {digest}")
-    print(f"Mode: {mode}")
+    print(f"source={SOURCE}")
+    print(f"sha256={digest}")
+    print(f"mode={mode}")
 
 if __name__ == "__main__":
     main()
