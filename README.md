@@ -1,34 +1,13 @@
-# Fast Gemini / NotebookLM exporter
+# Validator fix
 
-The exporter performs one bulk SQLite query for all Strong's occurrences,
-then groups the data in Python.
+This replaces the stale validator that expected 67 Markdown files in the
+NotebookLM directory.
 
-Default output:
+Current contract:
 
-```text
-build/notebooklm/
-├── Genesis.md
-├── Exodus.md
-├── ...
-├── Revelation.md
-└── Strongs/
-    ├── G0000-1999.md
-    ├── G2000-3999.md
-    ├── G4000-5999.md
-    └── H0000-9999.md
-```
+- SQLite: 66 books, non-empty verses and words, integrity check `ok`
+- Obsidian: 1189 chapter Markdown files + merged Strong's files
+- Gemini/NotebookLM: 66 book Markdown files + merged Strong's files
 
-Run:
-
-```bash
-python scripts/export_notebooklm.py
-```
-
-Change the Strong's batch size:
-
-```bash
-python scripts/export_notebooklm.py --strongs-per-file 5000
-```
-
-Book files remain separate because they are better retrieval units for
-Gemini/NotebookLM than one enormous Markdown source.
+Strong's files are intentionally not counted as 67. Their number depends on
+the configured batch size.
