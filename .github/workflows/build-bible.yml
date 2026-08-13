@@ -1,0 +1,115 @@
+name: Build Bible Study Corpus
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_sources:
+        description: Refresh upstream source datasets
+        required: false
+        default: false
+        type: boolean
+  push:
+    paths:
+      - "scripts/**"
+      - "vendor/**"
+      - ".github/workflows/build-bible.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SQLite
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+
+      - name: Preserve previous database
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          if [ -s data/bible_mt_tr.sqlite ]; then
+            cp data/bible_mt_tr.sqlite build/previous.sqlite
+          fi
+
+      - name: Download or use committed sources
+        env:
+          REFRESH: ${{ github.event.inputs.refresh_sources || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ "$REFRESH" = "true" ]; then
+            python scripts/download_sources.py --refresh
+          else
+            python scripts/download_sources.py
+          fi
+
+      - name: Build fresh SQLite
+        run: |
+          set -euo pipefail
+          python scripts/build_sqlite.py
+
+      - name: Validate fresh SQLite
+        run: |
+          set -euo pipefail
+          test -s build/bible_mt_tr.sqlite
+          sqlite3 build/bible_mt_tr.sqlite 'PRAGMA integrity_check;' | grep -qx ok
+          python scripts/validate.py
+
+      - name: Promote validated SQLite
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          cp build/bible_mt_tr.sqlite data/bible_mt_tr.sqlite
+          sqlite3 data/bible_mt_tr.sqlite 'PRAGMA integrity_check;' | grep -qx ok
+
+      - name: Generate Obsidian export
+        run: |
+          set -euo pipefail
+          python scripts/export_obsidian.py
+
+      - name: Generate NotebookLM/Gemini export
+        run: |
+          set -euo pipefail
+          python scripts/export_notebooklm.py
+
+      - name: Commit validated database and refreshed sources
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add data/bible_mt_tr.sqlite vendor/
+
+          if git diff --cached --quiet; then
+            echo "No committed data changes."
+          else
+            git commit -m "chore(data): update Bible corpus"
+            git push
+          fi
+
+      - name: Package generated exports
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp data/bible_mt_tr.sqlite dist/bible_mt_tr.sqlite
+          (cd build && zip -qr ../dist/obsidian.zip obsidian)
+          (cd build && zip -qr ../dist/notebooklm.zip notebooklm)
+          sha256sum dist/* > dist/SHA256SUMS
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bible-study-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error

@@ -1,18 +1,24 @@
-# KJV + Strong's importer
+# Bible Study committed-data pipeline
 
-Uses eBible.org KJV2006 USFX, specifically `eng-kjv2006_usfx.xml`.
+`data/bible_mt_tr.sqlite` is the committed, last-known-good SQLite snapshot.
 
-The important fix is USFX parsing: `<v>` is a verse-start milestone, not a
-verse container. The parser keeps the active verse while traversing the tree
-and reads Strong's values from `<w>` attributes.
+The GitHub Actions workflow:
 
-Validation requires 66 books, 31,102 verses, word records, and non-zero
-Strong's tags.
+1. preserves the previous database;
+2. optionally refreshes the committed source;
+3. builds a new SQLite database in `build/`;
+4. validates it;
+5. only then copies it to `data/bible_mt_tr.sqlite`;
+6. commits the validated database and refreshed source.
 
-The source is committed at `vendor/kjv2006/eng-kjv2006_usfx.xml`. Normal
-builds use it. `refresh_source=true` downloads, validates, and commits a
-replacement. Failed refreshes fall back to the committed source.
+A failed download does **not** delete the previous source.
 
-The importer never creates or modifies `build/bible_mt_tr.sqlite`.
+A failed SQLite build does **not** replace the committed database.
 
-Source archive: https://ebible.org/Scriptures/eng-kjv2006_usfx.zip
+The source expected by the importer is:
+
+`vendor/kjv2006/eng-kjv2006_usfx.xml`
+
+Do not fabricate or substitute another KJV XML filename.
+
+The schema reserves `lemma` and `morphology` for verified TR/MT imports; empty values are preferable to invented lexical data.
