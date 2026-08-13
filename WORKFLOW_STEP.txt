@@ -1,0 +1,6 @@
+Replace the existing Obsidian step with:
+
+- name: Generate Obsidian export
+  run: |
+    set -euo pipefail
+    python scripts/export_obsidian.py --strongs-per-file 1000

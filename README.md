@@ -1,31 +1,28 @@
-# Bible Study corpus pipeline
+# Fast Obsidian exporter
 
-## Canonical data
+The Strong's export no longer performs one SQLite query per Strong's ID.
 
-`data/bible_mt_tr.sqlite` is the committed, last-known-good database.
+It uses one `json_each()` query to load all occurrences, groups them in Python,
+and writes merged files containing up to 1,000 Strong's IDs each.
 
-`vendor/kjv2006/eng-kjv2006_usfx.xml` is the committed KJV2006 source fallback.
+Default:
 
-The workflow never promotes an unvalidated database.
+```bash
+python scripts/export_obsidian.py
+```
 
-## Outputs
+Change the batch size:
 
-- `data/bible_mt_tr.sqlite` — canonical committed SQLite
-- `build/obsidian/` — chapter-level Obsidian vault plus Strong's notes
-- `build/notebooklm/` — 66 book sources plus a Strong's occurrence index
-- GitHub Actions artifacts contain SQLite + both exports
+```bash
+python scripts/export_obsidian.py --strongs-per-file 2000
+```
 
-## Important
+The KJV remains one file per chapter. Strong's is merged into range files such as:
 
-The importer does not invent lemma or morphology. Those fields are reserved for
-the verified TR/MT lexical and morphology datasets.
+```text
+Strong's/G0000-0999.md
+Strong's/G1000-1999.md
+Strong's/H0000-0999.md
+```
 
-Put your existing validated source files into:
-
-`vendor/kjv2006/eng-kjv2006_usfx.xml`
-
-and, if already available:
-
-`data/bible_mt_tr.sqlite`
-
-before the first workflow run.
+Individual Strong's entries remain headings, so links can target `#G1234`.
